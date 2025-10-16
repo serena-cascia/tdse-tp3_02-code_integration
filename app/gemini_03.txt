@@ -1,0 +1,48 @@
+Claro, aquí tienes el análisis y la explicación del funcionamiento de los archivos `board.h`, `dwt.h` y `systick.c`.
+
+Estos tres archivos constituyen una capa de bajo nivel que proporciona utilidades y abstracción de hardware para la aplicación principal. Su función es interactuar directamente con los periféricos del microcontrolador para ofrecer funcionalidades más simples al resto del código.
+
+---
+
+### `board.h` - Abstracción de Hardware  BOARD
+* **Rol Principal**: Su propósito es **abstraer las diferencias de hardware entre distintas placas de desarrollo** (como diferentes modelos de Nucleo o Discovery). Permite que el código de la aplicación sea más genérico y portátil.
+
+* **Análisis Detallado**:
+    1.  **Selección de Placa**: La línea `#define BOARD (NUCLEO_F103RC)` es la clave. Aquí el desarrollador selecciona la placa específica que está utilizando.
+    2.  **Directivas de Preprocesador**: El resto del archivo utiliza directivas de preprocesador (`#if`, `#define`) para crear alias o macros. Dependiendo del valor de `BOARD`, se definen nombres genéricos como `LED_A_PIN` o `BTN_A_PORT` que apuntan a los pines y puertos GPIO correctos para esa placa en particular.
+    3.  **Ejemplo Práctico**: Si en tu código escribes `HAL_GPIO_WritePin(LED_A_PORT, LED_A_PIN, LED_A_ON);`, el preprocesador, antes de compilar, lo traducirá a `HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);` porque `BOARD` está definido como `NUCLEO_F103RC`. Si cambiaras `BOARD` a `STM32F429I_DISC1`, el mismo código se traduciría a `HAL_GPIO_WritePin(LD3_GPIO_Port, LD3_Pin, GPIO_PIN_SET);` sin necesidad de cambiar una sola línea del código de la aplicación.
+
+* **En Resumen**: Este archivo crea un "mapeo" entre nombres lógicos (como "el LED principal") y su conexión física real en la placa, haciendo el código más limpio y fácil de migrar a otro hardware.
+
+---
+
+### `dwt.h` - Medición de Tiempo de Alta Precisión ⏱️
+* **Rol Principal**: Proporcionar un conjunto de funciones para **medir con alta precisión el tiempo de ejecución de un bloque de código**, utilizando un periférico del núcleo ARM Cortex-M llamado DWT (Data Watchpoint and Trace).
+
+* **Análisis Detallado**:
+    1.  **¿Qué es el DWT?**: Es un componente de hardware del procesador que incluye un contador de ciclos de reloj (`CYCCNT`). Este contador se incrementa con cada ciclo de la CPU, ofreciendo la máxima resolución de tiempo posible.
+    2.  **Funciones Clave**:
+        * `cycle_counter_init()`: Habilita el contador de ciclos del DWT para que empiece a contar. Esta función se llama una vez al inicio, en `app_init()`.
+        * `cycle_counter_reset()`: Pone el contador de ciclos a `0`. Se usa justo antes de empezar a medir un bloque de código.
+        * `cycle_counter_get()`: Devuelve el número de ciclos de reloj que han transcurrido desde el último reinicio.
+        * `cycle_counter_get_time_us()`: La función más útil. Lee el contador de ciclos y lo **convierte a microsegundos** dividiéndolo por la frecuencia del sistema en MHz (`SystemCoreClock / 1000000`).
+    3.  **Uso en el Proyecto**: Este es el mecanismo exacto que utiliza `app.c` para medir el tiempo de ejecución de las tareas y calcular tanto `g_app_runtime_us` como el `WCET`. El flujo es: `cycle_counter_reset()`, se ejecuta la tarea, y luego `cycle_counter_get_time_us()` para saber cuánto tiempo tardó.
+
+* **En Resumen**: Este archivo es una herramienta de *profiling* o medición de rendimiento. No crea retardos, sino que actúa como un cronómetro de muy alta precisión para analizar la eficiencia del código.
+
+---
+
+### `systick.c` - Retardo Bloqueante 🛑
+* **Rol Principal**: Ofrecer una función, `systick_delay_us()`, que genera un **retardo o espera bloqueante** por una cantidad específica de microsegundos.
+
+* **Análisis Detallado**:
+    1.  **Funcionamiento Bloqueante**: "Bloqueante" significa que cuando se llama a esta función, el microcontrolador queda "atrapado" en un bucle `while` y no puede hacer ninguna otra tarea hasta que haya transcurrido el tiempo especificado. Esto consume el 100% de la CPU en esperar.
+    2.  **Lógica Interna**:
+        * El temporizador `SysTick` del Cortex-M es un contador descendente que se recarga automáticamente. La función lee el valor actual del contador (`SysTick->VAL`) al inicio.
+        * Calcula cuántos "ticks" del `SysTick` corresponden a los microsegundos solicitados, basándose en la frecuencia del sistema (`SystemCoreClock`).
+        * Entra en un bucle `while(1)` donde constantemente lee el valor actual del contador y calcula el tiempo transcurrido.
+        * El código maneja correctamente el caso en que el contador llega a cero y se recarga (evento de "wrap-around").
+        * El bucle solo termina cuando el tiempo transcurrido (`elapsed`) es mayor o igual al objetivo (`target`).
+    3.  **Caso de Uso**: Aunque los retardos bloqueantes deben evitarse en el bucle principal de un sistema de tiempo real (porque detienen toda la lógica), son útiles para tareas muy específicas, como esperar un corto tiempo durante la inicialización de un periférico que requiere un retardo mínimo entre comandos (como la pantalla LCD en `display.c`).
+
+* **En Resumen**: A diferencia de `dwt.h` que *mide* el tiempo, `systick.c` lo *consume*. Es una función de utilidad para generar pausas precisas, pero debe usarse con cuidado para no afectar la reactividad del sistema.
